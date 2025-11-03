@@ -6351,8 +6351,8 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
                 this.y = y;
                 this.birdType = birdType || BIRD_TYPES[Math.floor(Math.random() * BIRD_TYPES.length)];
                 this.nestObj = nestObj;
-                this.createdAt = Date.now(); // FIX: Use real-world timestamp instead of accumulated deltaTime
-                this.hatchTime = (1 + Math.random()) * 86400000; // 1-2 days in milliseconds
+                this.createdOnDay = dayNightCycleCount; // Track which in-game day the egg was laid
+                this.cyclesToHatch = 1 + Math.random(); // 1-2 in-game day cycles (4-8 minutes real-time)
                 this.size = 8; // Egg size
                 this.wobbleTimer = Math.random() * Math.PI * 2; // For subtle animation
                 this.color = '#F5F5DC'; // Beige/cream color
@@ -6369,8 +6369,6 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
             }
 
             update(deltaTime) {
-                // FIX: Calculate age from real-world time instead of deltaTime accumulation
-                const age = Date.now() - this.createdAt;
                 this.wobbleTimer += deltaTime * 0.001;
 
                 // Handle falling eggs
@@ -6421,8 +6419,9 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
                 }
 
                 // Check if ready to hatch (don't hatch if broken)
-                // FIX: Use real-world age calculation for hatching check
-                if (!this.broken && age >= this.hatchTime) {
+                // Use in-game day cycles for hatching
+                const cyclesElapsed = dayNightCycleCount - this.createdOnDay;
+                if (!this.broken && cyclesElapsed >= this.cyclesToHatch) {
                     return true;
                 }
 
@@ -6447,10 +6446,9 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
                     ctx.fill();
                 }
 
-                // Subtle wobble near hatching time
-                // FIX: Use real-world age for wobble animation
-                const age = Date.now() - this.createdAt;
-                if (age > this.hatchTime * 0.8) {
+                // Subtle wobble near hatching time (when 80% through incubation)
+                const cyclesElapsed = dayNightCycleCount - this.createdOnDay;
+                if (cyclesElapsed > this.cyclesToHatch * 0.8) {
                     const wobble = Math.sin(this.wobbleTimer * 4) * 1;
                     ctx.save();
                     ctx.translate(wobble, 0);
@@ -10326,7 +10324,7 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                                     // Create an EGG instead of baby bird
                                     const egg = new Egg(this.myNest.x, this.myNest.y, this.birdType, this.myNest);
                                     eggs.push(egg);
-                                    debugLog(`Egg laid in nest at (${this.myNest.x}, ${this.myNest.y}), will hatch in ${(egg.hatchTime / 86400000).toFixed(1)} days`);
+                                    debugLog(`Egg laid in nest at (${this.myNest.x}, ${this.myNest.y}), will hatch in ${egg.cyclesToHatch.toFixed(1)} in-game days`);
 
                                     // Create diary entry for egg
                                     const parentName = getBirdName(this);
@@ -21746,9 +21744,9 @@ if (toggleMushroom) {
                 }
 
                 const eggCount = eggs.length;
-                // Force all eggs to hatch by setting their creation time to 2 days ago
+                // Force all eggs to hatch by setting their creation day to 2+ cycles ago
                 eggs.forEach(egg => {
-                    egg.createdAt = Date.now() - (2 * 86400000); // 2 days ago
+                    egg.createdOnDay = dayNightCycleCount - Math.ceil(egg.cyclesToHatch) - 1;
                 });
 
                 debugLog(`Forcing ${eggCount} egg(s) to hatch immediately for testing`);
