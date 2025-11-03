@@ -8789,11 +8789,11 @@ if (timeOfDay < 1 && Math.random() < 0.001) {
                 // If no twigs found, try to create nest anyway (birds can build without materials in hand)
                 if (!foundTwig) {
                     // FIXED: Birds without nests should try to create one even without twigs
-                    if (!this.myNest && !this.isWild) {
+                    if (!this.myNest && !this.isWild && trees.length > 0) {
                         // Try to create a nest - bird will need materials to complete it
                         this.findOrCreateNest();
                         debugLog(`Bird attempting to create nest even without visible twigs`);
-                    } else {
+                    } else if (this.myNest || trees.length > 0) {
                         // Fly to likely twig areas to look for materials
                         const groundY = canvas.height * GROUND_HEIGHT_RATIO - 10;
                         let targetX;
@@ -8814,6 +8814,16 @@ if (timeOfDay < 1 && Math.random() < 0.001) {
                         this.state = BIRD_STATES.FLYING;
                         this.stateTimer = 0;
                         debugLog(`Bird looking for twigs near healthiest tree`);
+                    } else {
+                        // FIX: No trees and no twigs - don't try to build a nest
+                        // Do something else instead
+                        if (this.hunger > HUNGER_CRITICAL_THRESHOLD - 100) {
+                            this.findFoodSource();
+                            debugLog(`Bird can't find twigs or trees - finding food instead`);
+                        } else {
+                            this.findPerch();
+                            debugLog(`Bird can't find twigs or trees - finding perch instead`);
+                        }
                     }
                 }
             }
@@ -8898,13 +8908,27 @@ if (timeOfDay < 1 && Math.random() < 0.001) {
                     this.nestFindAttempts = 0;
                     debugLog(`Bird resetting nest find attempts to try again`);
                 }
-                
-                // If we can't create a nest, go back to flying but don't give up
+
+                // FIX: If we can't create a nest, transition to a different activity
+                // Don't call findTwigs() again as that creates an infinite loop
                 this.state = BIRD_STATES.FLYING;
                 this.stateTimer = 0;
-                
-                // Rather than find a perch, look for another twig
-                this.findTwigs();
+
+                // Choose a different activity to avoid getting stuck
+                const r = Math.random();
+                if (this.hunger > HUNGER_CRITICAL_THRESHOLD - 100) {
+                    // Hungry - find food instead
+                    this.findFoodSource();
+                    debugLog(`Bird can't create nest - going to find food instead`);
+                } else if (r < 0.6) {
+                    // Find a perch to rest
+                    this.findPerch();
+                    debugLog(`Bird can't create nest - going to perch instead`);
+                } else {
+                    // Just fly around
+                    this.generatePath(Math.random() * canvas.width, 100 + Math.random() * (canvas.height * 0.3));
+                    debugLog(`Bird can't create nest - flying around instead`);
+                }
             }
 
 
@@ -11348,10 +11372,14 @@ if (this.pathIndex >= this.path.length) {
     // Define hopping ground level once to ensure consistency (below ground line for worms/branches) - deeper for better ground presence
     const hoppingGroundY = birdGroundY;
 
-    // Only stay in hopping state for a reasonable duration
-    if (this.stateTimer < BIRD_STATE_DURATION.HOPPING) {
+    // FIX: Allow hop completion even if timer expired - prevents stuck birds mid-hop
+    // Only initialize new hops if timer hasn't expired
+    const allowNewHops = this.stateTimer < BIRD_STATE_DURATION.HOPPING;
+
+    // Always execute hop logic if in a hop, even if timer expired
+    if (allowNewHops || (this.hopData && this.hopData.phase === "hop")) {
         // Initialize hopping properties if not present
-        if (!this.hopData) {
+        if (!this.hopData && allowNewHops) {
             // V40 FIX: Check if food nearby for faster, more excited hopping (RESPONSIVE)
             const foodProximity = 80 * getResponsiveScale();
             const nearbyFood = foodItems.find(f => distance(this.x, this.y, f.x, f.y) < foodProximity);
@@ -11431,7 +11459,8 @@ if (this.pathIndex >= this.path.length) {
             this.hopData.headBobPhase = Math.sin(this.hopData.headBobTimer / 500) * 0.5;
 
             // Check if time to hop - guaranteed minimum ground time
-            if (this.hopData.phaseTimer > this.hopData.nextHopDelay) {
+            // FIX: Only start new hops if timer hasn't expired
+            if (this.hopData.phaseTimer > this.hopData.nextHopDelay && allowNewHops) {
                 // Transition to hop phase
                 this.hopData.phase = "hop";
                 this.hopData.phaseTimer = 0;
@@ -11511,15 +11540,19 @@ if (this.pathIndex >= this.path.length) {
                     // Start pecking again
                     this.pecking = true;
 
-                    // Reset hop sequence
-                    const sequenceType = Math.random();
-                    let hopSequence = 1;
-                    if (sequenceType < 0.3) hopSequence = 2;
-                    else if (sequenceType < 0.45) hopSequence = 3;
-                    this.hopData.hopSequence = hopSequence;
-                    this.hopData.hopsRemaining = hopSequence;
-
-                    debugLog("Bird finished hop sequence, returning to ground");
+                    // Reset hop sequence - only if timer hasn't expired
+                    if (allowNewHops) {
+                        const sequenceType = Math.random();
+                        let hopSequence = 1;
+                        if (sequenceType < 0.3) hopSequence = 2;
+                        else if (sequenceType < 0.45) hopSequence = 3;
+                        this.hopData.hopSequence = hopSequence;
+                        this.hopData.hopsRemaining = hopSequence;
+                        debugLog("Bird finished hop sequence, returning to ground");
+                    } else {
+                        // Timer expired - don't start new sequence
+                        debugLog("Bird finished hop, timer expired - will exit hopping");
+                    }
                 }
             }
         }
