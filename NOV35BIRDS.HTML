@@ -2036,7 +2036,7 @@ let rainsCompleted = 0; // Track number of completed rain events (for pond forma
     RESTING: 120000,    // 2 minutes - ground resting
     BATHING: 30000,     // 30 seconds - bathing behavior
     FLYING: 5000,       // 5 seconds - REDUCED to minimize exhausting flying
-    HOPPING: 120000,    // 2 minutes - extended ground hopping (visible behavior)
+    HOPPING: 30000,     // 30 seconds - ground hopping (reduced from 2 min to prevent stuck birds)
     // Activity states
     HUNTING: 20000,     // 20 seconds to hunt target
     COLLECTING: 20000,  // 20 seconds to collect twig
@@ -6346,7 +6346,7 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
 
         // NEW: Egg class for incubation stage before baby birds
         class Egg {
-            constructor(x, y, birdType, nestObj = null) {
+            constructor(x, y, birdType, nestObj = null, parentBird = null) {
                 this.x = x;
                 this.y = y;
                 this.birdType = birdType || BIRD_TYPES[Math.floor(Math.random() * BIRD_TYPES.length)];
@@ -6360,6 +6360,10 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
                 // Track if this egg has a parent sitting on it
                 this.beingIncubated = false;
                 this.associatedNest = nestObj;
+
+                // NEW: Assign a guardian bird to watch over this egg
+                this.assignedGuardian = parentBird; // Parent or nearby bird
+                this.lastGuardianCheck = Date.now();
 
                 // Falling state for when nest/tree is destroyed
                 this.isFalling = false;
@@ -6416,6 +6420,28 @@ currentHour = Math.floor(((timeOfDay < 1 ? timeOfDay * 12 : 12 + (timeOfDay - 1)
                 else if (this.associatedNest && this.associatedNest.tree) {
                     this.x = this.associatedNest.x;
                     this.y = this.associatedNest.y;
+                }
+
+                // NEW: Check guardian status every 5 seconds
+                const now = Date.now();
+                if (now - this.lastGuardianCheck > 5000) {
+                    this.lastGuardianCheck = now;
+
+                    // Check if guardian is still alive and in birds array
+                    if (this.assignedGuardian && birds.indexOf(this.assignedGuardian) === -1) {
+                        // Guardian died, find a new one
+                        const nearbyBird = birds.find(bird =>
+                            !bird.isWild &&
+                            distance(bird.x, bird.y, this.x, this.y) < 200
+                        );
+
+                        if (nearbyBird) {
+                            this.assignedGuardian = nearbyBird;
+                            debugLog(`New guardian assigned to egg at (${this.x.toFixed(0)}, ${this.y.toFixed(0)})`);
+                        } else {
+                            this.assignedGuardian = null;
+                        }
+                    }
                 }
 
                 // Check if ready to hatch (don't hatch if broken)
@@ -8883,8 +8909,8 @@ if (timeOfDay < 1 && Math.random() < 0.001) {
 
 
             findOrCreateBirdhouse() {
-                 // Only non-wild birds build birdhouses AND only after at least 3 days have passed
-    if (this.isWild || dayNightCycleCount < 3) return;
+                 // Only non-wild birds build birdhouses (day restriction removed)
+    if (this.isWild) return;
                 
                 // Check if there's already a birdhouse being built
                 const incompleteBirdhouse = birdhouses.find(bh => !bh.isComplete);
@@ -10321,8 +10347,8 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
 
                                     this.myNest.lastBabyTime = Date.now(); // Record when egg was laid
 
-                                    // Create an EGG instead of baby bird
-                                    const egg = new Egg(this.myNest.x, this.myNest.y, this.birdType, this.myNest);
+                                    // Create an EGG with parent bird assigned as guardian
+                                    const egg = new Egg(this.myNest.x, this.myNest.y, this.birdType, this.myNest, this);
                                     eggs.push(egg);
                                     debugLog(`Egg laid in nest at (${this.myNest.x}, ${this.myNest.y}), will hatch in ${egg.cyclesToHatch.toFixed(1)} in-game days`);
 
@@ -10330,8 +10356,9 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                                     const parentName = getBirdName(this);
                                     addDiaryEntry(`${parentName} laid an egg! It will hatch soon.`, 'birth');
 
-                                    // FIXED: Removed obsolete code that referenced undefined 'baby' variable
-                                    // Parent bird will naturally care for baby once egg hatches
+                                    // NEW: Set this bird as egg guardian
+                                    this.guardingEgg = egg;
+                                    debugLog(`${parentName} assigned as guardian to watch over egg`);
                                 }
                                 
                                 // Reset maintenance need if it was needed
@@ -11020,25 +11047,44 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                         break;
 
                     case BIRD_STATES.NEST_SITTING:
-                        // Sitting on nest to warm eggs/babies
-                        if (!this.myNest || !nests.includes(this.myNest)) {
-                            // No nest, can't sit
+                        // Sitting on nest/egg to warm eggs/babies
+                        // NEW: Also stay near egg if guarding one on the ground
+                        let targetPosition = null;
+                        if (this.guardingEgg && eggs.includes(this.guardingEgg)) {
+                            targetPosition = { x: this.guardingEgg.x, y: this.guardingEgg.y };
+                        } else if (this.myNest && nests.includes(this.myNest)) {
+                            targetPosition = { x: this.myNest.x, y: this.myNest.y };
+                        }
+
+                        if (!targetPosition) {
+                            // No nest or egg to sit on
+                            this.guardingEgg = null;
                             this.state = BIRD_STATES.FLYING;
                             this.stateTimer = 0;
                             break;
                         }
 
-                        // Stay at nest position
-                        this.x = this.myNest.x;
-                        this.y = this.myNest.y;
-                        this.velocity = { x: 0, y: 0 };
+                        // Stay near nest/egg position
+                        const distToTarget = distance(this.x, this.y, targetPosition.x, targetPosition.y);
+                        if (distToTarget > 30) {
+                            // Move toward egg/nest
+                            const dx = targetPosition.x - this.x;
+                            const dy = targetPosition.y - this.y;
+                            const dir = normalize(dx, dy);
+                            this.applyForce({ x: dir.x * 0.01, y: dir.y * 0.005 });
+                        } else {
+                            // Close enough, stay here
+                            this.x = targetPosition.x;
+                            this.y = targetPosition.y;
+                            this.velocity = { x: 0, y: 0 };
 
-                        // Occasional small adjustments
-                        if (Math.random() < 0.05) {
-                            this.applyForce({
-                                x: (Math.random() - 0.5) * 0.002,
-                                y: (Math.random() - 0.5) * 0.001
-                            });
+                            // Occasional small adjustments
+                            if (Math.random() < 0.05) {
+                                this.applyForce({
+                                    x: (Math.random() - 0.5) * 0.002,
+                                    y: (Math.random() - 0.5) * 0.001
+                                });
+                            }
                         }
 
                         // Occasional chirping while sitting
@@ -11046,14 +11092,17 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                             this.chirp(CHIRP_TYPES.SOCIAL, 0.3);
                         }
 
-                        // Leave nest if hungry or after duration
+                        // Leave nest/egg if hungry or after duration
                         if (this.hunger > HUNGER_CRITICAL_THRESHOLD || this.stateTimer > BIRD_STATE_DURATION.NEST_SITTING) {
                             if (this.hunger > HUNGER_CRITICAL_THRESHOLD) {
-                                // Must find food
+                                // Must find food, but return to egg soon
                                 this.findFoodSource();
                             } else {
-                                // Check on babies or rest
-                                if (babyBirds.length > 0 && Math.random() < 0.6) {
+                                // Check on babies, egg, or rest
+                                if (this.guardingEgg && eggs.includes(this.guardingEgg)) {
+                                    // Stay with egg, reset timer
+                                    this.stateTimer = 0;
+                                } else if (babyBirds.length > 0 && Math.random() < 0.6) {
                                     this.findBabyBirds();
                                 } else {
                                     this.state = BIRD_STATES.RESTING;
@@ -13197,12 +13246,12 @@ class Squirrel {
                 } else {
                     // V26: Reduced nest damage chance
                     // Look for bird nests - only if squirrel doesn't already have food
-                    const nearbyNest = nests.find(nest => 
+                    const nearbyNest = nests.find(nest =>
                         nest.tree === this.climbingTree &&
                         distance(this.x, this.y, nest.x, nest.y) < 40
                     );
-                    
-                    if (nearbyNest && Math.random() < 0.07) { // Reduced from 0.1
+
+                    if (nearbyNest && Math.random() < 0.028) { // Reduced from 0.07 to make it 2.5x slower
                         // Raid nest
                         nearbyNest.damage(4); // Reduced from 5
                         debugLog(`Squirrel damaged nest at (${nearbyNest.x}, ${nearbyNest.y})`);
@@ -17837,8 +17886,8 @@ function drawAnts() {
             if (Math.random() < spawnChance) { // Reduced from 0.02 to dial back squirrel spawns
                 let x, y, spawnSource = 'edge';
 
-                // 40% chance to spawn from a bush if bushes exist
-                if (bushes.length > 0 && Math.random() < 0.4) {
+                // 20% chance to spawn from a bush if bushes exist (reduced from 40% to half)
+                if (bushes.length > 0 && Math.random() < 0.2) {
                     const bush = bushes[Math.floor(Math.random() * bushes.length)];
                     x = bush.x;
                     y = bush.y;
