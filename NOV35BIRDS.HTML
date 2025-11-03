@@ -10222,8 +10222,17 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                         break;
 
                     case BIRD_STATES.COLLECTING:
+                        // Safety timeout to prevent birds getting stuck in collecting state
+                        if (this.stateTimer > BIRD_STATE_DURATION.COLLECTING) {
+                            this.state = BIRD_STATES.FLYING;
+                            this.stateTimer = 0;
+                            this.target = null;
+                            debugLog("Bird collecting timeout - transitioning to flying");
+                            break;
+                        }
+
                         // Check if target is valid
-                        if (!this.target || 
+                        if (!this.target ||
                             (this.target.type === 'twig' && twigs.indexOf(this.target.twig) === -1)) {
                             // Target is gone, go back to flying
                             this.state = BIRD_STATES.FLYING;
@@ -10290,12 +10299,12 @@ if ((isRaining || timeOfDay >= 1) && Math.random() < 0.4) { // 40% chance to see
                                 this.direction = dx > 0 ? 1 : -1;
                             }
                             
-                            // If collecting is taking too long, give up
-                            if (this.stateTimer > 7000) {
+                            // If collecting is taking too long, give up (use configured duration)
+                            if (this.stateTimer > BIRD_STATE_DURATION.COLLECTING) {
                                 this.state = BIRD_STATES.FLYING;
                                 this.stateTimer = 0;
                                 this.target = null;
-                                
+
                                 // Try again elsewhere
                                 this.findTwigs();
                             }
